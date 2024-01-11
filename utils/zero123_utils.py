@@ -57,7 +57,7 @@ def init_model(device, ckpt, half_precision=False):
     return models
 
 @torch.no_grad()
-def sample_model_batch(model, sampler, input_im, xs, ys, n_samples=4, precision='autocast', ddim_eta=1.0, ddim_steps=75, scale=3.0, h=256, w=256):
+def sample_model_batch(model, sampler, input_im, xs, ys, n_samples=4, precision='autocast', ddim_eta=1.0, ddim_steps=100, scale=3.0, h=1024, w=1024):
     precision_scope = autocast if precision == 'autocast' else nullcontext
     with precision_scope("cuda"):
         with model.ema_scope():
