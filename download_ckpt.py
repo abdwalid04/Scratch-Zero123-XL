@@ -28,7 +28,7 @@ def download_checkpoint(url, save_path):
 if __name__ == "__main__":
     ckpts = {
         "sam_vit_h_4b8939.pth": "https://huggingface.co/One-2-3-45/code/resolve/main/sam_vit_h_4b8939.pth",
-        "zero123-xl.ckpt": "https://huggingface.co/One-2-3-45/code/resolve/main/zero123-xl.ckpt",
+        # "zero123-xl.ckpt": "https://huggingface.co/One-2-3-45/code/resolve/main/zero123-xl.ckpt",
         "stable_zero123.ckpt": "https://huggingface.co/stabilityai/stable-zero123/resolve/main/stable_zero123.ckpt",
     }
     for ckpt_name, ckpt_url in ckpts.items():
