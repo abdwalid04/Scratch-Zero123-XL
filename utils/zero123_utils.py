@@ -15,18 +15,18 @@ from torchvision import transforms
 
 
 def load_model_from_config(config, ckpt, device, verbose=False):
-    print(f'Loading model from {ckpt}')
-    pl_sd = torch.load(ckpt, map_location='cpu')
-    if 'global_step' in pl_sd:
+    print(f"Loading model from {ckpt}")
+    pl_sd = torch.load(ckpt, map_location="cpu")
+    if "global_step" in pl_sd:
         print(f'Global Step: {pl_sd["global_step"]}')
-    sd = pl_sd['state_dict']
+    sd = pl_sd["state_dict"]
     model = instantiate_from_config(config.model)
     m, u = model.load_state_dict(sd, strict=False)
     if len(m) > 0 and verbose:
-        print('missing keys:')
+        print("missing keys:")
         print(m)
     if len(u) > 0 and verbose:
-        print('unexpected keys:')
+        print("unexpected keys:")
         print(u)
 
     model.to(device)
@@ -35,60 +35,92 @@ def load_model_from_config(config, ckpt, device, verbose=False):
 
 
 def init_model(device, ckpt, half_precision=False):
-    config = os.path.join(os.path.dirname(__file__), '../configs/sd-objaverse-finetune-c_concat-256.yaml')
+    config = os.path.join(
+        os.path.dirname(__file__), "../configs/sd-objaverse-finetune-c_concat-256.yaml"
+    )
     config = OmegaConf.load(config)
 
     # Instantiate all models beforehand for efficiency.
     models = dict()
-    print('Instantiating LatentDiffusion...')
+    print("Instantiating LatentDiffusion...")
     if half_precision:
-        models['turncam'] = torch.compile(load_model_from_config(config, ckpt, device=device)).half()
+        models["turncam"] = torch.compile(
+            load_model_from_config(config, ckpt, device=device)
+        ).half()
     else:
-        models['turncam'] = torch.compile(load_model_from_config(config, ckpt, device=device))
-    print('Instantiating StableDiffusionSafetyChecker...')
-    models['nsfw'] = StableDiffusionSafetyChecker.from_pretrained(
-        'CompVis/stable-diffusion-safety-checker').to(device)
-    models['clip_fe'] = CLIPImageProcessor.from_pretrained(
-        "openai/clip-vit-large-patch14")
+        models["turncam"] = torch.compile(
+            load_model_from_config(config, ckpt, device=device)
+        )
+    print("Instantiating StableDiffusionSafetyChecker...")
+    models["nsfw"] = StableDiffusionSafetyChecker.from_pretrained(
+        "CompVis/stable-diffusion-safety-checker"
+    ).to(device)
+    models["clip_fe"] = CLIPImageProcessor.from_pretrained(
+        "openai/clip-vit-large-patch14"
+    )
     # We multiply all by some factor > 1 to make them less likely to be triggered.
-    models['nsfw'].concept_embeds_weights *= 1.2
-    models['nsfw'].special_care_embeds_weights *= 1.2
+    models["nsfw"].concept_embeds_weights *= 1.2
+    models["nsfw"].special_care_embeds_weights *= 1.2
 
     return models
 
+
 @torch.no_grad()
-def sample_model_batch(model, sampler, input_im, xs, ys, n_samples=4, precision='autocast', ddim_eta=1.0, ddim_steps=100, scale=3.0, h=1024, w=1024):
-    precision_scope = autocast if precision == 'autocast' else nullcontext
+def sample_model_batch(
+    model,
+    sampler,
+    input_im,
+    xs,
+    ys,
+    n_samples=4,
+    precision="autocast",
+    ddim_eta=1.0,
+    ddim_steps=75,
+    scale=3.0,
+    h=256,
+    w=256,
+):
+    precision_scope = autocast if precision == "autocast" else nullcontext
     with precision_scope("cuda"):
         with model.ema_scope():
             c = model.get_learned_conditioning(input_im).tile(n_samples, 1, 1)
             T = []
             for x, y in zip(xs, ys):
-                T.append([np.radians(x), np.sin(np.radians(y)), np.cos(np.radians(y)), 0])
+                T.append(
+                    [np.radians(x), np.sin(np.radians(y)), np.cos(np.radians(y)), 0]
+                )
             T = torch.tensor(np.array(T))[:, None, :].float().to(c.device)
             c = torch.cat([c, T], dim=-1)
             c = model.cc_projection(c)
             cond = {}
-            cond['c_crossattn'] = [c]
-            cond['c_concat'] = [model.encode_first_stage(input_im).mode().detach()
-                                .repeat(n_samples, 1, 1, 1)]
+            cond["c_crossattn"] = [c]
+            cond["c_concat"] = [
+                model.encode_first_stage(input_im)
+                .mode()
+                .detach()
+                .repeat(n_samples, 1, 1, 1)
+            ]
             if scale != 1.0:
                 uc = {}
-                uc['c_concat'] = [torch.zeros(n_samples, 4, h // 8, w // 8).to(c.device)]
-                uc['c_crossattn'] = [torch.zeros_like(c).to(c.device)]
+                uc["c_concat"] = [
+                    torch.zeros(n_samples, 4, h // 8, w // 8).to(c.device)
+                ]
+                uc["c_crossattn"] = [torch.zeros_like(c).to(c.device)]
             else:
                 uc = None
 
             shape = [4, h // 8, w // 8]
-            samples_ddim, _ = sampler.sample(S=ddim_steps,
-                                             conditioning=cond,
-                                             batch_size=n_samples,
-                                             shape=shape,
-                                             verbose=False,
-                                             unconditional_guidance_scale=scale,
-                                             unconditional_conditioning=uc,
-                                             eta=ddim_eta,
-                                             x_T=None)
+            samples_ddim, _ = sampler.sample(
+                S=ddim_steps,
+                conditioning=cond,
+                batch_size=n_samples,
+                shape=shape,
+                verbose=False,
+                unconditional_guidance_scale=scale,
+                unconditional_conditioning=uc,
+                eta=ddim_eta,
+                x_T=None,
+            )
             # print(samples_ddim.shape)
             # samples_ddim = torch.nn.functional.interpolate(samples_ddim, 64, mode='nearest', antialias=False)
             x_samples_ddim = model.decode_first_stage(samples_ddim)
@@ -97,8 +129,19 @@ def sample_model_batch(model, sampler, input_im, xs, ys, n_samples=4, precision=
             torch.cuda.empty_cache()
             return ret_imgs
 
+
 @torch.no_grad()
-def predict_stage1_gradio(model, raw_im, save_path = "", adjust_set=[], device="cuda", ddim_steps=75, scale=3.0, delta_x=[], delta_y=[]):
+def predict_stage1_gradio(
+    model,
+    raw_im,
+    save_path="",
+    adjust_set=[],
+    device="cuda",
+    ddim_steps=75,
+    scale=3.0,
+    delta_x=[],
+    delta_y=[],
+):
     # raw_im = raw_im.resize([256, 256], Image.LANCZOS)
     # input_im_init = preprocess_image(models, raw_im, preprocess=False)
     input_im_init = np.asarray(raw_im, dtype=np.float32) / 255.0
@@ -112,20 +155,38 @@ def predict_stage1_gradio(model, raw_im, save_path = "", adjust_set=[], device="
     sampler = DDIMSampler(model)
     # sampler.to(device)
     if adjust_set != []:
-        x_samples_ddims_8 = sample_model_batch(model, sampler, input_im, 
-                                               [delta_x_1_8[i] for i in adjust_set], [delta_y_1_8[i] for i in adjust_set], 
-                                               n_samples=len(adjust_set), ddim_steps=ddim_steps, scale=scale)
+        x_samples_ddims_8 = sample_model_batch(
+            model,
+            sampler,
+            input_im,
+            [delta_x_1_8[i] for i in adjust_set],
+            [delta_y_1_8[i] for i in adjust_set],
+            n_samples=len(adjust_set),
+            ddim_steps=ddim_steps,
+            scale=scale,
+        )
     else:
-        x_samples_ddims_8 = sample_model_batch(model, sampler, input_im, delta_x_1_8, delta_y_1_8, n_samples=len(delta_x_1_8), ddim_steps=ddim_steps, scale=scale)
+        x_samples_ddims_8 = sample_model_batch(
+            model,
+            sampler,
+            input_im,
+            delta_x_1_8,
+            delta_y_1_8,
+            n_samples=len(delta_x_1_8),
+            ddim_steps=ddim_steps,
+            scale=scale,
+        )
     sample_idx = 0
     for stage1_idx in range(len(delta_x_1_8)):
         if adjust_set != [] and stage1_idx not in adjust_set:
             continue
-        x_sample = 255.0 * rearrange(x_samples_ddims_8[sample_idx].numpy(), 'c h w -> h w c')
+        x_sample = 255.0 * rearrange(
+            x_samples_ddims_8[sample_idx].numpy(), "c h w -> h w c"
+        )
         out_image = Image.fromarray(x_sample.astype(np.uint8))
         ret_imgs.append(out_image)
         if save_path:
-            out_image.save(os.path.join(save_path, '%d.png'%(stage1_idx)))
+            out_image.save(os.path.join(save_path, "%d.png" % (stage1_idx)))
         sample_idx += 1
     del x_samples_ddims_8
     del sampler

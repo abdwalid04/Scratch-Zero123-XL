@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 from PIL import Image
 from rembg import remove
+import trimesh
 
 # predict bbox of the foreground
 def pred_bbox(image):
@@ -42,8 +43,9 @@ def image_preprocess_nosave(input_image, lower_contrast=True, rescale=True):
     padded_image = np.zeros((side_len, side_len, 4), dtype=np.uint8)
     center = side_len//2
     padded_image[center-h//2:center-h//2+h, center-w//2:center-w//2+w] = image_arr[y:y+h, x:x+w]
-    rgba = Image.fromarray(padded_image).resize((1024, 1024), Image.LANCZOS)
+    rgba = Image.fromarray(padded_image).resize((256, 256), Image.LANCZOS)
 
     rgba_arr = np.array(rgba) / 255.0
     rgb = rgba_arr[...,:3] * rgba_arr[...,-1:] + (1 - rgba_arr[...,-1:])
     return Image.fromarray((rgb * 255).astype(np.uint8))
+
